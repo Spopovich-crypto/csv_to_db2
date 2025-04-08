@@ -1,11 +1,10 @@
-import os
 import re
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 # --- 入力スキーマ定義 ---
 
@@ -32,7 +31,7 @@ class UserInput(BaseModel):
 # --- ファイル名からメタ情報を抽出 ---
 
 
-def extract_metadata_from_filename(file: Path) -> dict:
+def extract_metadata_from_filename(file: Path) -> Optional[Dict[str, Any]]:
     pattern = r"(?P<plant_code>[A-Z]+)#(?P<machine_code>\d+)(?P<datestr>\d{6})(?P<timestr>\d{6})_(?P<sensor_type>[^.]+)"
     match = re.match(pattern, file.name)
     if not match:
@@ -62,9 +61,12 @@ def extract_metadata_from_filename(file: Path) -> dict:
 # --- 指定フォルダからファイルを収集 ---
 
 
-def collect_sensor_files(user_input: UserInput) -> List[Dict]:
+def collect_sensor_files(user_input: UserInput) -> List[Dict[str, Any]]:
     all_files = list(Path(user_input.target_folder).rglob("*"))
     collected = []
+
+    print(f"🔍 検索対象ファイル数: {len(all_files)}")
+    print(f"📂 name_patterns: {user_input.name_patterns}")
 
     for file in all_files:
         if file.suffix.lower() == ".csv" or file.suffix.lower() == ".zip":
@@ -77,6 +79,7 @@ def collect_sensor_files(user_input: UserInput) -> List[Dict]:
                                     pat in zip_info.filename
                                     for pat in user_input.name_patterns
                                 ):
+                                    print(f"📦 ZIP内マッチ: {zip_info.filename}")
                                     metadata = extract_metadata_from_filename(
                                         Path(zip_info.filename)
                                     )
@@ -87,6 +90,7 @@ def collect_sensor_files(user_input: UserInput) -> List[Dict]:
                         print(f"⚠️ ZIPファイルが壊れています: {file}")
                         continue
                 else:
+                    print(f"✅ マッチ: {file.name}")
                     metadata = extract_metadata_from_filename(file)
                     if metadata:
                         collected.append(metadata)
@@ -99,13 +103,11 @@ def collect_sensor_files(user_input: UserInput) -> List[Dict]:
 if __name__ == "__main__":
     import json
 
-    # datetimeオブジェクトをJSON変換するためのカスタムエンコーダ
     def json_serial(obj):
         if isinstance(obj, datetime):
             return obj.isoformat()
         raise TypeError(f"Type {type(obj)} not serializable")
 
-    # JSONファイルまたは文字列から読み込む例
     sample_input = {
         "target_folder": "./data",
         "name_patterns": ["Cond", "Vib", "Tmp"],
@@ -125,7 +127,12 @@ if __name__ == "__main__":
         ],
     }
 
-    user_input = UserInput(**sample_input)
-    results = collect_sensor_files(user_input)
+    try:
+        user_input = UserInput(**sample_input)
+    except ValidationError as e:
+        print("⚠️ 入力データにエラーがあります:")
+        print(e.json(indent=2, ensure_ascii=False))
+        exit(1)
 
+    results = collect_sensor_files(user_input)
     print(json.dumps(results, indent=2, ensure_ascii=False, default=json_serial))
